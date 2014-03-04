@@ -1,0 +1,149 @@
+#!/usr/bin/python -tt
+# 
+# Copyright (C) 2009 Linden Lab
+#
+# Released under the GPL v2 or later.  For a full description of the license,
+# please visit http://www.gnu.org/licenses/gpl-2.0.html
+#
+
+"""
+@file check_ganglios_disk
+@brief look for over-full disks
+
+Copyright (c) 2007, Linden Research, Inc.
+$License$
+$Id: check_ganglios_disk,v 1.12 2008/03/05 21:35:51 benoc Exp $
+"""
+
+import sys
+import ganglios.ganglios as ganglios
+import socket
+
+__revision__ = '0'
+
+
+def main ():
+    """
+    This check examines the 'disk_usage' gangila metric on all hosts.
+
+    Usage:
+      check_ganglios_disk [warn|critical] threshold [include|exclude host list]
+        threshould should be a number, above which the alert will trigger
+        include host list - only check the hosts listed (DEPRECATED - do not use)
+        exclude host list - check all hosts *except* those listed.  Useful if some unimportant hosts are permanently in the triggered state.
+    """
+    if sys.argv[ 1 ] == 'warn':
+        err_status = 1
+    elif sys.argv[ 1 ] == 'critical':
+        err_status = 2
+    else:
+        print 'bad arguments'
+        sys.exit (2)
+
+    cutoff = int (sys.argv[ 2 ])
+    try:
+        inexcl_flag = sys.argv[ 3 ]
+    except:
+        inexcl_flag = ''
+
+    # i want to be able to list cnames in the nagios config.  turn
+    # each alias into the real hostname (ganglios always reports by
+    # the real host name) for the purpose of matching, but say
+    # the alias in the output of this plugin.
+    incl_excl_hosts = {}
+
+    for host in sys.argv[ 4: ]:
+        if ( not host.endswith('.com') and not host.endswith('.net')):
+            host += '.lindenlab.com'
+
+        if host.find ('%d') >= 0:
+            # a %d in the hostname means to include all hosts with
+            # the name and %d expanded to a number.  pull the
+            # actual names from DNS until we stop seeing them.
+            i = 0
+            missed = 0
+            while True:
+                try:
+                    invdb_name = host % i
+                    invdb_cname = socket.gethostbyname_ex (invdb_name)
+                    incl_excl_hosts[ invdb_cname[ 0 ] ] = invdb_name
+                    incl_excl_hosts[ "int." + invdb_cname[ 0 ] ] = "int." + invdb_name
+                    incl_excl_hosts[ "eth0-0." + invdb_cname[ 0 ] ] = "eth0-0." + invdb_name
+                    incl_excl_hosts[ "eth1-0." + invdb_cname[ 0 ] ] = "eth1-0." + invdb_name
+                    incl_excl_hosts[ "tunnel0." + invdb_cname[ 0 ] ] = "tunnel0." + invdb_name
+                    i += 1
+                except socket.gaierror:
+                    missed += 1
+                    i += 1
+                    if missed > 4:
+                        break
+        else:
+            # this is just a hostname (no expansion).  figure out its
+            # real hostname so we can spot its data in the ganglia data
+            try:
+                (name, aliaslist, addresslist) = socket.gethostbyname_ex (host)
+            except socket.gaierror:
+                sys.stdout.write ("CRITICAL: " + host + " does not resolve (fix the nagios config)")
+                ganglios.done (2)
+            incl_excl_hosts[ name ] = host
+
+    # incl_excl_hosts now contains a dictionary of {cname => alias} eg. {db1.lindenlab.com => mysql.agni.lindenlab.com}
+
+    #####
+    # for name in incl_excl_hosts.keys ():
+    #     print '%s -> %s' % (name, incl_excl_hosts[ name ])
+    # sys.exit (0)
+    #####
+
+    report = {}
+    hostmetrics = {}
+
+    def build_metrics_include( host, metric, value):
+        ''' callback from ganglios.parse_ganglia '''
+        if host in incl_excl_hosts:
+            hostmetrics[ incl_excl_hosts[host] ] = float(value)
+
+    def build_metrics_exclude( host, metric, value):
+        ''' callback from ganglios.parse_ganglia '''
+        if not host in incl_excl_hosts:
+            hostmetrics[ host ] = float(value)
+
+    status = 0 # OK
+    if( inexcl_flag == 'include' ):
+        build_metrics = build_metrics_include
+    else:
+        # either exclude or empty
+        build_metrics = build_metrics_exclude
+
+    # build hostmetrics using build_metrics callback
+    ganglios.parse_ganglia (['disk_usage'], build_metrics)
+
+    # pull out hosts that have metric > cutoff
+    report = dict([
+        (host.replace('.lindenlab.com',''), hostmetrics[host])
+        for host in hostmetrics
+        if hostmetrics[host] >= cutoff
+        ])
+
+    hosts = report.keys ()
+    hosts.sort ()
+    if len (hosts) > 0:
+        sys.stdout.write ('<b>DISK</b>:')
+        for host in hosts:
+            sys.stdout.write ('%s:%s ' % (host, report[ host ]))
+        status = err_status # warn or critical
+
+    ganglios.done (status)
+
+
+if __name__ == "__main__":
+    try:
+        main ()
+    except SystemExit, exp:
+        # this exception is raised when the check exits normally
+        raise exp
+    except:
+        # if anything raises an exception in the test, die critical
+        sys.stdout.write ("CRITICAL: check raised an exception!")
+        ganglios.done (2)
+

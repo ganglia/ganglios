@@ -1,0 +1,100 @@
+#!/usr/bin/python -tt
+# 
+# Copyright (C) 2009 Linden Lab
+#
+# Released under the GPL v2 or later.  For a full description of the license,
+# please visit http://www.gnu.org/licenses/gpl-2.0.html
+#
+
+"""
+@file check_ganglios_generic_value
+@brief a ganglios module that checks a given metric against a reference value
+
+Copyright (c) 2008, Linden Research, Inc.
+$License$
+"""
+
+import sys
+import ganglios.ganglios as ganglios
+import operator
+from optparse import OptionParser
+
+__revision__ = 1;
+
+def main():
+    """Check $host in the ganglia cache that $metric $op than $value
+example:
+check_ganglios_generic_value alan.lindenlab.com disk_usage gt 90
+    this will return CRIT if alan's disk_usage goes above 90
+possible ops:
+    gt ge lt le eq ne
+each means "warn if the $cur_value $op $expected_value
+so passing 'gt 10' means CRIT if the host's value greater than 10
+
+
+    """
+    # actually, any valid function supplied by the 'operator' module that return a
+    # boolean will probably work, but the above functions are what I expect to use
+
+    description = """check_ganglios_generic_value -H hostname -m metric -w val -c val -o op
+    
+    Checks the value of a metric against the warning and crit values
+    passed in using the operator supplied.  An example call that checks that
+    the load_one metric for foo.example.com.  It will trigger WARN if load_one
+    is greater than 2 and CRIT when greater than 4:
+    ./check_ganglios_generic_value -H foo.example.com -m load_one -w 2 -c 4 -o gt"""
+    parser = OptionParser(usage=description)
+
+    parser.add_option('-H', dest='hostname', help='hostname')
+    parser.add_option('-m', dest='metric', help='metric to check')
+    parser.add_option('-o', dest='op', help='valid operators are: gt ge lt le eq ne')
+    parser.add_option('-w', dest='warning', help='warning threshold for the metric')
+    parser.add_option('-c', dest='critical', help='critical threshold for the metric')
+    parser.add_option('-g', dest='getmetric', action="store_true", help='only return the metric, don\'t do any comparisons')
+
+    options, args = parser.parse_args()
+    host_name = options.hostname
+    metric = options.metric
+    getmetric = options.getmetric
+
+    cur_val_raw = ganglios.get_metric_for_host(host_name, metric)
+    try:
+        cur_val = float(cur_val_raw)
+    except TypeError, e:
+        # ganglios didn't return a number - probably None
+        if (cur_val_raw is None):
+            output = "UNKNOWN - check failed, metric not found"
+        else:
+            output = "UNKNOWN - check failed (returned '%s' when casting '%s')" % (e, cur_val_raw)
+        status = 3
+        sys.stdout.write(output)
+        ganglios.done(status)
+
+    if(getmetric):
+        # this feature was added for scripts that want the value for their own processing
+        output = "%s" % cur_val
+        sys.stdout.write(output)
+        status = 0
+        ganglios.done(status)
+
+    # if called with -g, these metrics are optional.  Move them here so you don't trigger an exception on casting an empty option
+    op = options.op
+    warn_value = float(options.warning)
+    crit_value = float(options.critical)
+
+    if getattr(operator, op)(cur_val, crit_value):
+        status = 2
+        output = "CRITICAL: %s is %s (%s %s)" % (metric, cur_val, op, crit_value)
+    elif getattr(operator, op)(cur_val, warn_value):
+        status = 1
+        output = "WARN: %s is %s (%s %s)" % (metric, cur_val, op, warn_value)
+    else:
+        status = 0
+        output = "OK: %s is %s" % (metric, cur_val)
+
+    sys.stdout.write(output)
+    ganglios.done(status)
+
+if __name__ == "__main__":
+    main()
+

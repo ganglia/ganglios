@@ -1,0 +1,94 @@
+#!/usr/bin/python -tt
+# 
+# Copyright (C) 2009 Linden Lab
+#
+# Released under the GPL v2 or later.  For a full description of the license,
+# please visit http://www.gnu.org/licenses/gpl-2.0.html
+#
+
+"""
+@file check_ganglios_
+@brief a ganglios module that checks memory used for a host
+
+Copyright (c) 2008, Linden Research, Inc.
+$License$
+"""
+
+import sys
+import ganglios.ganglios as ganglios
+import operator
+from optparse import OptionParser
+
+__revision__ = 1;
+
+def main():
+    """
+    Check $host in the ganglia uses less than $limit memory
+    This check is interesting because memory used is not reported by ganglia.
+    Only total and memory free etc. are reported.  This module will do the
+    right math to calculate memory used.
+    """
+
+    parser = OptionParser()
+
+    parser.add_option('-H', dest='hostname', help='hostname')
+    parser.add_option('-u', '--used', action='store_true', dest='used', default=False, help='check memory used is less than threshold (default)')
+    parser.add_option('-f', '--avail', action='store_true', dest='avail', default=False, help='check memory available is greater than threshold')
+    parser.add_option('-w', dest='warning', help='warning threshold for the metric')
+    parser.add_option('-c', dest='critical', help='critical threshold for the metric')
+
+    options, args = parser.parse_args()
+    host_name = options.hostname
+    warn_value = float(options.warning)
+    crit_value = float(options.critical)
+    if( options.used and options.avail ):
+        # error - both used and avail were set
+        parser.error("options --used and --avail are mutually exclusive")
+
+    mem_total_raw = ganglios.get_metric_for_host(host_name, 'mem_total')
+    mem_shared_raw = ganglios.get_metric_for_host(host_name, 'mem_shared')
+    mem_free_raw = ganglios.get_metric_for_host(host_name, 'mem_free')
+    mem_cached_raw = ganglios.get_metric_for_host(host_name, 'mem_cached')
+    mem_buffers_raw = ganglios.get_metric_for_host(host_name, 'mem_buffers')
+
+    try:
+        mem_total = float(mem_total_raw)
+        mem_shared = float(mem_shared_raw)
+        mem_free = float(mem_free_raw)
+        mem_cached = float(mem_cached_raw)
+        mem_buffers = float(mem_buffers_raw)
+    except TypeError, e:
+        # ganglios didn't return a number - probably None
+        status = 2
+        output = "CRITICAL - check failed (returned '%s' when casting '%s, %s, %s, %s, %s')" % (e, mem_total_raw, mem_shared_raw, mem_free_raw, mem_cached_raw, mem_buffers_raw)
+        sys.stdout.write(output)
+        ganglios.done(2)
+
+    if( options.avail ):
+        # testing against free memory
+        mem = mem_shared + mem_free + mem_cached + mem_buffers
+        metric = 'mem_avail'
+        op = 'lt'
+    else:
+        # testing against used memory.
+        mem = mem_total - mem_shared - mem_free - mem_cached - mem_buffers
+        metric = 'mem_used'
+        op = 'gt'
+
+
+    if getattr(operator, op)(mem, crit_value):
+        status = 2
+        output = "CRITICAL: %s is %s (%s %s)" % (metric, mem, op, crit_value)
+    elif getattr(operator, op)(mem, warn_value):
+        status = 1
+        output = "WARN: %s is %s (%s %s)" % (metric, mem, op, warn_value)
+    else:
+        status = 0
+        output = "OK: %s is %s" % (metric, mem)
+
+    sys.stdout.write(output)
+    ganglios.done(status)
+
+if __name__ == "__main__":
+    main()
+

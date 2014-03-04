@@ -1,0 +1,59 @@
+#!/usr/bin/python -tt
+# 
+# Copyright (C) 2009 Linden Lab
+#
+# Released under the GPL v2 or later.  For a full description of the license,
+# please visit http://www.gnu.org/licenses/gpl-2.0.html
+#
+
+"""
+@file check_ganglios_diskio
+@brief look in ganglia for heavy disk-io
+
+Copyright (c) 2007, Linden Research, Inc.
+$License$
+"""
+
+import sys
+import ganglios.ganglios as ganglios
+
+__revision__ = '0'
+
+
+def main ():
+    """
+    checks all hosts for the 'disk_io' metric.  
+    Usage:
+      cehck_ganglios_diskio threshold
+        threshold should be an integer above which hosts will trigger the alert
+    """
+    report = {}
+
+    cutoff = int (sys.argv[ 1 ])
+
+    def thunk (host, metric, value):
+        """ callback """
+        num = int (float (value))
+        if (num > cutoff):
+            report[ host.replace ('.lindenlab.com', '') ] = str (num)
+
+    status = 0 # OK
+    ganglios.parse_ganglia (['disk_io'], thunk)
+
+    hosts = report.keys ()
+    hosts.sort ()
+    if len (hosts) > 0:
+        sys.stdout.write ('<b>disk-IO</b>:')
+        for host in hosts:
+            if not host.startswith ('sim'):
+                sys.stdout.write ('%s:%s ' % (host, report[ host ]))
+        for host in hosts:
+            if host.startswith ('sim'):
+                sys.stdout.write ('%s:%s ' % (host, report[ host ]))
+        status = 1 # warn
+
+    ganglios.done (status)
+
+
+if __name__ == "__main__":
+    main ()

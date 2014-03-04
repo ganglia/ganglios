@@ -1,0 +1,37 @@
+##################
+##
+##  Ganglios - Integration of Nagios with Ganglia
+##
+##  This directory contains a number of scripts that make it easy to
+##  configure nagios to take action based on data gathered by ganglia
+##
+##  Written for Linden Lab, copyright 2008
+##  License to modify and redistribute granted under the GPL v2 or later
+##
+##################
+
+
+0. Table of Contents
+1. Overview
+2. Installation
+
+
+1. Overview
+
+This document assumes familiarity with both Ganglia (http://ganglia.info) and Nagios (http://www.nagios.org).
+
+Ganglios retrieves metrics from a gmond collector node and stores them in the local filesystem, one file per host.  Nagios checks can refer to this data to perform checks on a wide range of hosts much more efficiently than SSHing into every node.
+
+Your ganglia configuration should have one (or more) gmond nodes that are serving as collector nodes.  In a multicast environment, any gmond node will do.  This nagios / ganglia integration works by retrieving all the ganglia stats from one or more gmond nodes and storing them locally for nagios to examine.  The nagios plugins then examine the locally stored files to retrieve the relevant statistics, using the included python module that understands the on-disk ganglia stats.
+
+Note that you must only point ganglia_parser at multiple gmond collector nodes if they have different information, rather than for redundancy.  If you have separate clusters in your environment, you should point ganglia_parser to one gmond for each cluster.
+
+2. Installation
+
+On your nagios host:
+2a. modify the listXMLSources() function in ganglia_parser to correctly return a list of your gmond collector nodes.
+2b. install ganglia_parser in /usr/local/sbin/ (or in a location of your choice)
+2c. install the 'ganglios' python module in /usr/local/lib/python2.3/site-packages/ganglios/
+2d. install the cronjob (ganglios.cron) to collect ganglia data in /etc/cron.d/  Set the user as whom this cronjob runs to the owner of /var/lib/ganglia/
+
+At this point, you should be populating /var/lib/ganglia/xmlcache/ every 2 minutes.  Examine this data to make sure it seems right.  You should have /var/lib/ganglia/xmlcache/<hostname>.xml (one for each collector node) and /var/lib/ganglia/xmlcache/hosts/<hostname>

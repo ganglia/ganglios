@@ -1,0 +1,19 @@
+Source: ganglios
+Section: net
+Priority: optional
+Maintainer: Lex Linden <lex@lindenlab.com>
+Build-Depends: debhelper (>= 5), python-support
+Standards-Version: 3.7.2
+
+Package: ganglios
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, ${python:Depends}, nagios3
+Description: Scripts to help nagios act on data from ganglia
+ Ganglios retrieves metrics from a gmond collector node and stores them in the
+ local filesystem, one file per host.  Nagios checks can refer to this data to
+ perform checks on a wide range of hosts much more efficiently than SSHing into
+ every node.
+ .
+ Ganglios includes a Python module, ganglios.py, to make acting on this data
+ simpler.  Example nagios checks are included to show how to use the data
+ ganglios retrieves.

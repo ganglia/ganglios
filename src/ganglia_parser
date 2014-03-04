@@ -1,0 +1,250 @@
+#!/usr/bin/python -tt
+# 
+# Copyright (C) 2009 Linden Lab
+#
+# Released under the GPL v2 or later.  For a full description of the license,
+# please visit http://www.gnu.org/licenses/gpl-2.0.html
+#
+
+
+"""
+Iterates over all the gmond collector nodes and fetch metrics where available.
+Separates metrics into one file per host for easier processing by nagios 
+plugins.
+"""
+
+import sys
+import socket
+import os
+import glob
+import tempfile
+import errno
+import re
+import logging
+
+__revision__ = '0'
+
+dataDir = '/var/lib/ganglia/xmlcache'
+logDir = '/var/log/ganglia'
+logger = logging.getLogger('ganglia_parser')
+hdlr = logging.FileHandler('%s/ganglia_parser.log' % logDir)
+formatter = logging.Formatter('%(asctime)s %(levelname)-8s %(message)s')
+hdlr.setFormatter(formatter)
+logger.addHandler(hdlr) 
+logger.setLevel(logging.DEBUG)
+
+def unionMetrics( curMetrics, hostFilePath ):
+    '''When a single host is present in more than one gmond collector node
+    (because of DNS errors or something else), write out the union of metrics
+    from each collector node, taking the more recent metric when the same
+    metric is present in multiple nodes.'''
+    metrics = dict()
+    metricsAge = dict()
+    # parseMetric grabs the metric name and age
+    parseMetric = re.compile('^<METRIC NAME="([^"]*).*TN="([^"]*)')
+
+    # populate metrics and metricsAge from the existing file
+    oldFileHandle = open(hostFilePath, 'r')
+    fileFirstLine = oldFileHandle.readline()
+    for line in oldFileHandle:
+        regMatch = parseMetric.match(line)
+        if regMatch:
+            met = regMatch.group(1)
+            age = regMatch.group(2)
+            metrics[met] = line
+            metricsAge[met] = age
+        else:
+            # the match failed, which will happen on </HOST> but nowhere else?
+            # theoretically, more logging could go in here
+            pass
+
+    # selectively overwrite metrics with stuff from the buf if it is newer
+    bufFirstLine = curMetrics[0]
+    for line in curMetrics[1:-1]:
+        regMatch = parseMetric.match(line)
+        if regMatch:
+            met = regMatch.group(1)
+            # age represents seconds since the metric was reported.  larger == older
+            age = regMatch.group(2)
+            if metrics.has_key(met):
+                try:
+                    if float(age) < float(metricsAge[met]):
+                        # if this metric exists and is older, replace it
+                        metrics[met] = line
+                except Exception, e:
+                    logger.warning("exception caught when comparing TN values: %s", e)
+            else:
+                # if the metric doesn't exist, add it
+                metrics[met] = line
+        else:
+            # the match failed, which shouldn't happen (because first and last lines are cut by the slice)
+            logger.warning("regMatch failed unexpectedly.  current line: %s" % (line))
+
+
+    # compare first lines to see which to use
+    parseHost = re.compile('^<HOST.*TN="([^"]*)')
+    fileAge = parseHost.match(fileFirstLine).group(1)
+    bufAge = parseHost.match(bufFirstLine).group(1)
+    if fileAge < bufAge:
+        firstLine = fileFirstLine
+    else:
+        firstLine = bufFirstLine
+
+    # construct array to pass back to the calling function
+    newBuf = []
+    newBuf.append(firstLine)
+    newBuf.extend(metrics.values())
+    newBuf.append('</HOST>\n')
+
+    # return the union metrics buffer
+    return newBuf
+
+
+def listXMLSources():
+    """ returns a list of hosts to fetch ganglia stats from (the gmond
+    collector nodes).  Pulls this list from the gmetad.conf.  This will only
+    work when the ganglia_parser script is run on the same host as the ganglia
+    web UI and aggregator host."""
+    nannybots = []
+    logger.info("Retrieving list of nannybots...")
+    # so long as ganglios is running on the same host as the ganglia web ui, it
+    # can use ganglia's gmetad.conf to get the list of sources.
+    gmetadconf = open('/etc/ganglia/gmetad.conf')
+    # datasource is the string 'data_source' followed by a quoted string name followed by
+    #  an optional polling interval followed by a list of hostnames
+    datasourcere = re.compile('^data_source "(?P<name>[^"]*)" (?P<pollint>\d+ )?(?P<hostlist>.*)')
+    for line in gmetadconf.readlines():
+        match = datasourcere.match(line)
+        if match:
+            for host in match.group('hostlist').split():
+                nannybots.append(host)
+
+    logger.info("nannybot list: %s" % nannybots)
+    return nannybots
+
+def storeXMLData(srcHosts, dataDir):
+    """ Fetch ganglia xml data from remote hosts and store it locally in $dataDir """
+
+    logger.info("Retrieving ganglia data from selected hosts...")
+    for host in srcHosts:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(15.0)
+            s.connect((host, 8649))
+            (fdTF,tmpFile) = tempfile.mkstemp()
+            fdTmpFile = os.fdopen(fdTF, "w+b")
+            while True:
+                data = s.recv(1024)
+                if len(data) == 0:
+                    break
+                fdTmpFile.write(data)
+            s.close()
+            fdTmpFile.close()
+
+            # hostname is being used as the filename here
+            targetfile = '%s/%s.xml' % (dataDir, host)
+            try:
+                os.rename(tmpFile, targetfile)
+                os.chmod(targetfile, 0644)
+            except:
+                logger.critical("Failed to rename %s to %s" % (tmpFile, targetfile))
+
+            logger.info('parsing %s: [OK]' % host)
+        except Exception, e:
+            logger.warning('parsing %s: [FAILED] | reason: %s'  % (host, e))
+
+def splitXML(dataDir):
+    """ find all .xml files in $dataDir and split them up on a per-host basis.
+    Grid and Cluster are discarded. We dont care about the xml data, so we can
+    save CPU cycle treating the file as txt one. """
+
+    # These patterns don't include whitespace, which might be a problem if
+    # someday ganglia starts emitting formatted xml
+    hostOpen = re.compile('^<HOST NAME="([^"]*)', re.I) #retrieve hostname
+    hostClose = re.compile('^</HOST>$', re.I)
+    totalHostCount = 0
+    try:
+        os.mkdir("%s/hosts" % dataDir,0755)
+    except OSError, e:
+        if e.errno != errno.EEXIST:
+            logger.critical('Problems creating %s. Aborting data splitting' % dataDir)
+            sys.exit(2)
+
+    logger.info("Splitting xml data in per-host files...")
+    # Sean suggested this could backfire. Cant find a practical case myself
+    xmlFiles = glob.glob('%s/*.xml' % dataDir)
+
+    # flagDupeHost tells you whether this host has been seen before (in this run)
+    # if it has, union the current host file and the stuff read in
+    flagDupeHost = False
+
+    hostsource = dict()
+    for xmlFile in xmlFiles:
+        fdXML = open(xmlFile)
+        thisHostCount = 0
+        for line in fdXML:
+            mHO = hostOpen.match(line)
+            if mHO:
+                hostname = mHO.group(1)
+                if hostsource.has_key(hostname):
+                    hostsource[hostname].append(xmlFile)
+                    v = hostsource[hostname]
+                    flagDupeHost = True
+                    logger.info("host '%s' seen more than once: %s" % (hostname, v))
+                else:
+                    hostsource[hostname] = [xmlFile]
+
+                hostFile = '%s/hosts/%s' % (dataDir, hostname)
+                hostBuf = [line]
+                # now we want to continue iterating over the same file
+                # until we reach the next close line
+                while True:
+                    line = fdXML.next()
+                    hostBuf.append(line)
+                    if hostClose.match(line):
+                        break
+
+                if ( flagDupeHost):
+                    oldHostBufLen = len(hostBuf)
+                    try:
+                        hostBuf = unionMetrics(hostBuf, hostFile)
+                    except Exception, e:
+                        hostBuf = []
+                        logger.warning("duped host: unionMetrics failed with exception %s" % e)
+                    newHostBufLen = len(hostBuf)
+                    logger.debug("duped host: old length: %s, new length: %s" % (oldHostBufLen, newHostBufLen))
+                    flagDupeHost = False
+
+                if ( len(hostBuf) != 0 ):
+                    # if hostBuf is empty, don't touch the existing file (so it will go stale rather than writing bad data)
+                    fdHostFile = open(hostFile, 'w+b')
+                    fdHostFile.write(''.join(hostBuf))
+                    fdHostFile.close()
+                else:
+                    logger.warning("didn't write file %s because hostBuf is empty" % hostFile)
+                thisHostCount += 1
+                totalHostCount += 1
+        logger.info("Parsed hosts in source '%s': %s" % (xmlFile, thisHostCount))
+    logger.info("Parsed hosts total: %s" % totalHostCount)
+
+def main():
+    """ main docstring """
+
+    # logging at level crit to give verification that the process is running, but not spew too much.
+    # this should probably be changed to logger.info
+    logger.critical('Starting ganglia_parser')
+    try:
+        os.makedirs(dataDir,2755)
+    except OSError, e:
+        if e.errno != errno.EEXIST:
+            logger.critical('Problems creating %s. Aborting data splitting' % dataDir)
+            sys.exit(2)
+
+
+    storeXMLData(listXMLSources(), dataDir)
+    splitXML(dataDir)
+    logger.critical('Finished ganglia_parser')
+
+
+if __name__ == "__main__":
+    main()
