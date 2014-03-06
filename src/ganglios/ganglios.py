@@ -109,28 +109,35 @@ def get_metric_for_host(hostname, metricname):
     This is method (b) above
     """
 
-    # first, find the canonical name for the host passed in
-    # i.e. translate inv5-mysql.agni.lindenlab.com to db1c3.lindenlab.com
+    # in addition to looking for the hostname passed in, let's
+    # do reverse DNS and look for that name too.
+    hostnames = [hostname]
     try:
-        new_hostname = socket.gethostbyaddr(hostname)[0]
+        hostnames.append(socket.gethostbyaddr(hostname)[0])
     except socket.gaierror, e:
-        # name not found.  it will probably fail anyways... but pass it through just in case
-        new_hostname = hostname
-    hostname = new_hostname
+        # if we didn't find the name, it probably won't work, but meh. try anyways.
+        pass
 
-    #strip off leading int., eth0., etc.
-    split_name = hostname.split('.')
-    if(split_name[0] in ('int', 'eth0', 'eth1', 'tunnel0', 'tunnel1')):
-        hostname = '.'.join(split_name[1:])
+    # TODO: be fancy and turn this into a list comprehension
+    for (index, hostname) in enumerate(hostnames):
+        #strip off leading int., eth0., etc.
+        split_name = hostname.split('.')
+        if(split_name[0] in ('int', 'eth0', 'eth1', 'tunnel0', 'tunnel1')):
+            hostnames[index] = '.'.join(split_name[1:])
 
-    # find the one file that best matches what came in.  checks for names like
+    # find the first file that matches what came in.  checks for names like
     # int.$name and $name and complains if it doesn't find a unique match.
-    filelist = glob.glob(os.path.join(_hostdir, "*.%s" % hostname))
-    if len(filelist) == 0:
-        filelist = glob.glob(os.path.join(_hostdir, "%s" % hostname))
-    # if there's still no match, complain host not found.
-    if len(filelist) == 0:
+    filelist = []
+    try:
+        while len(filelist) == 0:
+            hostname = hostnames.pop()
+            filelist = glob.glob(os.path.join(_hostdir, "*.%s" % hostname))
+            if len(filelist) == 0:
+                filelist = glob.glob(os.path.join(_hostdir, "%s" % hostname))
+    except IndexError:
+        # we tried to pop off an empty list of hostnames :(
         raise Exception("Host not found: %s." % hostname)
+
 ###
 ###  for the VPNs, it's a valid state that there exist >1 files for each vpn 
 ###  (a tunnel address and a private interface).  What's the right action to take
