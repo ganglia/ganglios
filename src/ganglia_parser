@@ -21,6 +21,7 @@ import tempfile
 import errno
 import re
 import logging
+import shutil
 
 __revision__ = '0'
 
@@ -144,7 +145,7 @@ def storeXMLData(srcHosts, dataDir):
             # hostname is being used as the filename here
             targetfile = '%s/%s.xml' % (dataDir, host)
             try:
-                os.rename(tmpFile, targetfile)
+                shutil.mv(tmpFile, targetfile)
                 os.chmod(targetfile, 0644)
             except:
                 logger.critical("Failed to rename %s to %s" % (tmpFile, targetfile))
