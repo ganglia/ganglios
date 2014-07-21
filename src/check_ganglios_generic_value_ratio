@@ -1,6 +1,5 @@
-#!/usr/local/bin/python -tt
-# Note: since nagios02 is rhel5 and has very old python we can't use /usr/bin/python 
-# since it is missing necessary xml libs. Fix when we upgrade nagios to RHEL6. 
+#!/usr/bin/python -tt
+#
 # Copyright (C) 2009 Linden Lab
 #
 # Released under the GPL v2 or later.  For a full description of the license,
