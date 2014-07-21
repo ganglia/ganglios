@@ -22,10 +22,10 @@ from optparse import OptionParser
 __revision__ = 1;
 
 def main():
-    """Check $host in the ganglia cache that $metric $op than $value
+    """Check $host in the ganglia cache the ratio $numerator / $metric $op than $value
 example:
-check_ganglios_generic_value alan.lindenlab.com disk_usage gt 90
-    this will return CRIT if alan's disk_usage goes above 90
+check_ganglios_generic_value_ratio alan.lindenlab.com load cores gt 1.0
+    this will return CRIT if the load is greater than the number of cores.
 possible ops:
     gt ge lt le eq ne
 each means "warn if the $cur_value $op $expected_value
@@ -36,7 +36,7 @@ so passing 'gt 10' means CRIT if the host's value greater than 10
     # actually, any valid function supplied by the 'operator' module that return a
     # boolean will probably work, but the above functions are what I expect to use
 
-    description = """check_ganglios_generic_value -H hostname -n metric -m metric -w val -c val -o op
+    description = """check_ganglios_generic_value_ratio -H hostname -n metric -m metric -w val -c val -o op
     
     Checks the ratio of n/m of two metrics against the warning and crit values
     passed in using the operator supplied.  An example call that checks that
