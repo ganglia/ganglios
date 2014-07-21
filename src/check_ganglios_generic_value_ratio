@@ -1,0 +1,114 @@
+#!/usr/bin/python -tt
+#
+# Copyright (C) 2009 Linden Lab
+#
+# Released under the GPL v2 or later.  For a full description of the license,
+# please visit http://www.gnu.org/licenses/gpl-2.0.html
+#
+
+"""
+@file check_ganglios_generic_value_ratio
+@brief a ganglios module that checks the ratio of two metrics against a reference value
+
+Copyright (c) 2008, Linden Research, Inc.
+$License$
+"""
+
+import sys
+import ganglios.ganglios as ganglios
+import operator
+from optparse import OptionParser
+
+__revision__ = 1;
+
+def main():
+    """Check $host in the ganglia cache the ratio $numerator / $metric $op than $value
+example:
+check_ganglios_generic_value_ratio alan.lindenlab.com load cores gt 1.0
+    this will return CRIT if the load is greater than the number of cores.
+possible ops:
+    gt ge lt le eq ne
+each means "warn if the $cur_value $op $expected_value
+so passing 'gt 10' means CRIT if the host's value greater than 10
+
+
+    """
+    # actually, any valid function supplied by the 'operator' module that return a
+    # boolean will probably work, but the above functions are what I expect to use
+
+    description = """check_ganglios_generic_value_ratio -H hostname -n metric -m metric -w val -c val -o op
+    
+    Checks the ratio of n/m of two metrics against the warning and crit values
+    passed in using the operator supplied.  An example call that checks that
+    the load_one metric for foo.example.com.  It will trigger WARN if ratio of load to cores
+    is greater than 0.9 and CRIT when greater than 1.2:
+    ./check_ganglios_generic_value -H foo.example.com -n load_one -m cores -w 0.9 -c 1.2 -o gt"""
+    parser = OptionParser(usage=description)
+
+    parser.add_option('-H', dest='hostname', help='hostname')
+    parser.add_option('-n', dest='numerator', help='metric to check numerator in ratio')
+    parser.add_option('-m', dest='metric', help='metric to check denominator in ratio')
+    parser.add_option('-o', dest='op', help='valid operators are: gt ge lt le eq ne')
+    parser.add_option('-w', dest='warning', help='warning threshold for the metric')
+    parser.add_option('-c', dest='critical', help='critical threshold for the metric')
+    parser.add_option('-g', dest='getmetric', action="store_true", help='only return the ratio, don\'t do any comparisons')
+
+    options, args = parser.parse_args()
+    host_name = options.hostname
+    metric = options.metric
+    numerator = options.numerator
+    getmetric = options.getmetric
+
+    cur_val_raw = ganglios.get_metric_for_host(host_name, metric)
+    cur_numerator_raw = ganglios.get_metric_for_host(host_name, numerator)
+    try:
+        cur_denominator = float(cur_val_raw)
+        cur_numerator = float(cur_numerator_raw)
+        cur_val = cur_numerator / cur_denominator
+    except TypeError, e:
+        # ganglios didn't return a number - probably None
+        if (cur_val_raw is None):
+            output = "UNKNOWN - check failed, metric not found"
+        else:
+            output = "UNKNOWN - check failed (returned '%s' when casting '%s')" % (e, cur_val_raw)
+        if (cur_numerator_raw is None):
+            output = "UNKNOWN - check failed, numerator metric not found"
+        else:
+            output = "UNKNOWN - check failed (returned '%s' when casting '%s')" % (e, cur_numerator_raw)
+        status = 3
+        sys.stdout.write(output)
+        ganglios.done(status)
+    except ZeroDivisionError:
+        output = "UNKNOWN - check failed metric '%s' has zero value" % (metric)
+        status = 3
+        sys.stdout.write(output)
+        ganglios.done(status)
+
+    if(getmetric):
+        # this feature was added for scripts that want the value for their own processing
+        output = "%s" % cur_val
+        sys.stdout.write(output)
+        status = 0
+        ganglios.done(status)
+
+    # if called with -g, these metrics are optional.  Move them here so you don't trigger an exception on casting an empty option
+    op = options.op
+    warn_value = float(options.warning)
+    crit_value = float(options.critical)
+
+    if getattr(operator, op)(cur_val, crit_value):
+        status = 2
+        output = "CRITICAL: %s is %s (%s %s)" % (metric, cur_val, op, crit_value)
+    elif getattr(operator, op)(cur_val, warn_value):
+        status = 1
+        output = "WARN: %s is %s (%s %s)" % (metric, cur_val, op, warn_value)
+    else:
+        status = 0
+        output = "OK: %s is %s" % (metric, cur_val)
+
+    sys.stdout.write(output)
+    ganglios.done(status)
+
+if __name__ == "__main__":
+    main()
+
